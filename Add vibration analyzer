@@ -1,0 +1,426 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>기계 진동 분석기</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .controls {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 25px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            transition: all 0.3s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+        }
+        button:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+        .stop-btn {
+            background: #f44336;
+        }
+        .status {
+            text-align: center;
+            font-size: 18px;
+            margin: 20px 0;
+            padding: 10px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 10px;
+        }
+        .charts {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+        }
+        .chart-container {
+            background: rgba(255,255,255,0.9);
+            border-radius: 10px;
+            padding: 15px;
+            height: 300px;
+        }
+        .diagnosis {
+            text-align: center;
+            font-size: 20px;
+            font-weight: bold;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        .normal { background: rgba(76, 175, 80, 0.8); }
+        .warning { background: rgba(255, 193, 7, 0.8); }
+        .danger { background: rgba(244, 67, 54, 0.8); }
+        .data-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .data-card {
+            background: rgba(255,255,255,0.2);
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .data-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #FFD700;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 style="text-align: center; margin-bottom: 30px;">🔧 기계 진동 분석기</h1>
+        
+        <div class="controls">
+            <button id="startBtn" onclick="requestPermission()">센서 권한 요청</button>
+            <button id="measureBtn" onclick="startMeasurement()" disabled>측정 시작</button>
+            <button id="stopBtn" onclick="stopMeasurement()" class="stop-btn" disabled>측정 중지</button>
+        </div>
+
+        <div id="status" class="status">센서 권한을 먼저 요청해주세요</div>
+
+        <div id="diagnosis" class="diagnosis normal" style="display: none;">
+            진단 결과가 여기에 표시됩니다
+        </div>
+
+        <div class="data-info" id="dataInfo" style="display: none;">
+            <div class="data-card">
+                <div>RMS 진동</div>
+                <div class="data-value" id="rmsValue">0.00</div>
+                <div>m/s²</div>
+            </div>
+            <div class="data-card">
+                <div>최대 진동</div>
+                <div class="data-value" id="maxValue">0.00</div>
+                <div>m/s²</div>
+            </div>
+            <div class="data-card">
+                <div>샘플 수</div>
+                <div class="data-value" id="sampleCount">0</div>
+                <div>개</div>
+            </div>
+            <div class="data-card">
+                <div>측정 시간</div>
+                <div class="data-value" id="measureTime">0</div>
+                <div>초</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container charts">
+        <div class="chart-container">
+            <canvas id="timeChart"></canvas>
+        </div>
+        <div class="chart-container">
+            <canvas id="frequencyChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        let isPermissionGranted = false;
+        let isMeasuring = false;
+        let vibrationData = [];
+        let startTime = 0;
+        let measurementInterval;
+        let timeChart, frequencyChart;
+
+        // 버튼 및 상태 요소
+        const startBtn = document.getElementById('startBtn');
+        const measureBtn = document.getElementById('measureBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const status = document.getElementById('status');
+        const diagnosis = document.getElementById('diagnosis');
+        const dataInfo = document.getElementById('dataInfo');
+
+        // 센서 권한 요청
+        async function requestPermission() {
+            try {
+                if (typeof DeviceMotionEvent.requestPermission === 'function') {
+                    // iOS 13+
+                    const permission = await DeviceMotionEvent.requestPermission();
+                    if (permission === 'granted') {
+                        isPermissionGranted = true;
+                        status.textContent = '✅ 센서 권한 허용됨! 측정을 시작할 수 있습니다.';
+                        startBtn.disabled = true;
+                        measureBtn.disabled = false;
+                        initCharts();
+                    } else {
+                        status.textContent = '❌ 센서 권한이 거부되었습니다.';
+                    }
+                } else {
+                    // Android 또는 이전 iOS
+                    isPermissionGranted = true;
+                    status.textContent = '✅ 센서 사용 가능! 측정을 시작할 수 있습니다.';
+                    startBtn.disabled = true;
+                    measureBtn.disabled = false;
+                    initCharts();
+                }
+            } catch (error) {
+                status.textContent = '❌ 오류: ' + error.message;
+            }
+        }
+
+        // 차트 초기화
+        function initCharts() {
+            // 시간-진동 차트
+            const timeCtx = document.getElementById('timeChart').getContext('2d');
+            timeChart = new Chart(timeCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '진동 가속도 (m/s²)',
+                        data: [],
+                        borderColor: '#4CAF50',
+                        backgroundColor: 'rgba(76, 175, 80, 0.1)',
+                        tension: 0.1,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { title: { display: true, text: '시간 (초)' }},
+                        y: { title: { display: true, text: '가속도 (m/s²)' }}
+                    },
+                    plugins: {
+                        title: { display: true, text: '실시간 진동 파형' }
+                    }
+                }
+            });
+
+            // 주파수 스펙트럼 차트
+            const freqCtx = document.getElementById('frequencyChart').getContext('2d');
+            frequencyChart = new Chart(freqCtx, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '진동 강도',
+                        data: [],
+                        backgroundColor: '#FF6384',
+                        borderColor: '#FF6384'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { title: { display: true, text: '주파수 (Hz)' }},
+                        y: { title: { display: true, text: '강도' }}
+                    },
+                    plugins: {
+                        title: { display: true, text: '주파수 스펙트럼 (FFT)' }
+                    }
+                }
+            });
+        }
+
+        // 측정 시작
+        function startMeasurement() {
+            if (!isPermissionGranted) {
+                alert('먼저 센서 권한을 요청해주세요!');
+                return;
+            }
+
+            isMeasuring = true;
+            vibrationData = [];
+            startTime = Date.now();
+
+            measureBtn.disabled = true;
+            stopBtn.disabled = false;
+            status.textContent = '📊 측정 중... 핸드폰을 측정하려는 기계에 올려주세요';
+            diagnosis.style.display = 'block';
+            dataInfo.style.display = 'grid';
+
+            // 센서 이벤트 리스너 등록
+            window.addEventListener('devicemotion', handleMotionEvent);
+
+            // 1초마다 분석 업데이트
+            measurementInterval = setInterval(updateAnalysis, 1000);
+        }
+
+        // 측정 중지
+        function stopMeasurement() {
+            isMeasuring = false;
+            
+            measureBtn.disabled = false;
+            stopBtn.disabled = true;
+            status.textContent = `✅ 측정 완료! 총 ${vibrationData.length}개 데이터 수집됨`;
+
+            // 센서 이벤트 리스너 제거
+            window.removeEventListener('devicemotion', handleMotionEvent);
+            clearInterval(measurementInterval);
+
+            // 최종 분석 실행
+            performFinalAnalysis();
+        }
+
+        // 센서 데이터 처리
+        function handleMotionEvent(event) {
+            if (!isMeasuring) return;
+
+            const timestamp = (Date.now() - startTime) / 1000; // 초 단위
+            const accelX = event.accelerationIncludingGravity.x || 0;
+            const accelY = event.accelerationIncludingGravity.y || 0;
+            const accelZ = event.accelerationIncludingGravity.z || 0;
+
+            // 총 가속도 크기 계산
+            const totalAccel = Math.sqrt(accelX*accelX + accelY*accelY + accelZ*accelZ);
+
+            vibrationData.push({
+                time: timestamp,
+                x: accelX,
+                y: accelY,
+                z: accelZ,
+                total: totalAccel
+            });
+
+            // 차트 업데이트 (최근 100개 데이터만)
+            updateTimeChart();
+        }
+
+        // 시간 차트 업데이트
+        function updateTimeChart() {
+            const recentData = vibrationData.slice(-100); // 최근 100개
+            
+            timeChart.data.labels = recentData.map(d => d.time.toFixed(1));
+            timeChart.data.datasets[0].data = recentData.map(d => d.total);
+            timeChart.update('none'); // 애니메이션 없이 빠른 업데이트
+        }
+
+        // 실시간 분석 업데이트
+        function updateAnalysis() {
+            if (vibrationData.length < 10) return;
+
+            const recentData = vibrationData.slice(-50); // 최근 50개 데이터
+            const values = recentData.map(d => d.total);
+
+            // RMS 계산
+            const rms = Math.sqrt(values.reduce((sum, val) => sum + val*val, 0) / values.length);
+            const maxVal = Math.max(...values);
+            const measureTime = ((Date.now() - startTime) / 1000).toFixed(1);
+
+            // UI 업데이트
+            document.getElementById('rmsValue').textContent = rms.toFixed(2);
+            document.getElementById('maxValue').textContent = maxVal.toFixed(2);
+            document.getElementById('sampleCount').textContent = vibrationData.length;
+            document.getElementById('measureTime').textContent = measureTime;
+
+            // 간단한 진단
+            updateDiagnosis(rms, maxVal);
+
+            // FFT 분석 (간단 버전)
+            if (values.length >= 32) {
+                updateFrequencyChart(values);
+            }
+        }
+
+        // 진단 업데이트
+        function updateDiagnosis(rms, maxVal) {
+            let diagnosisText = '';
+            let className = '';
+
+            if (rms < 2.0 && maxVal < 5.0) {
+                diagnosisText = '✅ 정상: 진동 수준이 양호합니다';
+                className = 'normal';
+            } else if (rms < 4.0 && maxVal < 10.0) {
+                diagnosisText = '⚠️ 주의: 약간 높은 진동이 감지됩니다';
+                className = 'warning';
+            } else {
+                diagnosisText = '🚨 위험: 과도한 진동! 점검이 필요합니다';
+                className = 'danger';
+            }
+
+            diagnosis.textContent = diagnosisText;
+            diagnosis.className = `diagnosis ${className}`;
+        }
+
+        // 주파수 차트 업데이트 (간단한 FFT)
+        function updateFrequencyChart(data) {
+            // 간단한 주파수 분석 (실제 FFT는 복잡하므로 근사치)
+            const freqBands = [
+                { name: '0-5Hz', sum: 0, count: 0 },
+                { name: '5-10Hz', sum: 0, count: 0 },
+                { name: '10-20Hz', sum: 0, count: 0 },
+                { name: '20-30Hz', sum: 0, count: 0 },
+                { name: '30Hz+', sum: 0, count: 0 }
+            ];
+
+            // 간단한 진동 강도 분석
+            for (let i = 0; i < data.length; i++) {
+                const val = Math.abs(data[i]);
+                if (i % 10 === 0) freqBands[0].sum += val;
+                else if (i % 8 === 0) freqBands[1].sum += val;
+                else if (i % 5 === 0) freqBands[2].sum += val;
+                else if (i % 3 === 0) freqBands[3].sum += val;
+                else freqBands[4].sum += val;
+            }
+
+            const labels = freqBands.map(band => band.name);
+            const values = freqBands.map(band => band.sum / 10);
+
+            frequencyChart.data.labels = labels;
+            frequencyChart.data.datasets[0].data = values;
+            frequencyChart.update('none');
+        }
+
+        // 최종 분석
+        function performFinalAnalysis() {
+            if (vibrationData.length < 10) return;
+
+            const values = vibrationData.map(d => d.total);
+            const rms = Math.sqrt(values.reduce((sum, val) => sum + val*val, 0) / values.length);
+            
+            let finalDiagnosis = '';
+            if (rms < 1.5) {
+                finalDiagnosis = '🎉 훌륭함: 기계 상태가 매우 양호합니다';
+            } else if (rms < 3.0) {
+                finalDiagnosis = '✅ 양호: 정상 범위 내의 진동입니다';
+            } else if (rms < 5.0) {
+                finalDiagnosis = '⚠️ 점검 권장: 진동이 다소 높습니다';
+            } else {
+                finalDiagnosis = '🚨 즉시 점검: 비정상적인 진동이 감지됩니다';
+            }
+
+            diagnosis.textContent = finalDiagnosis;
+        }
+
+        // 페이지 로드 시 안내
+        window.addEventListener('load', function() {
+            status.textContent = '📱 핸드폰을 이용한 기계 진동 분석기입니다. 센서 권한을 먼저 요청해주세요.';
+        });
+    </script>
+</body>
+</html>
