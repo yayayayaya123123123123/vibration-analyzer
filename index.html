@@ -113,6 +113,23 @@
         <div class="controls">
             <button id="startBtn" onclick="requestPermission()">센서 권한 요청</button>
             <button id="calibrateBtn" onclick="calibrateSensor()" class="calibrate-btn" disabled>중력 보정</button>
+            
+            <div style="margin: 15px 0;">
+                <label for="applianceSelect" style="display: block; margin-bottom: 5px;">측정할 가전제품:</label>
+                <select id="applianceSelect" style="padding: 8px; border-radius: 5px; margin-right: 10px;">
+                    <option value="general">일반 기계</option>
+                    <option value="washer">세탁기</option>
+                    <option value="refrigerator">냉장고</option>
+                    <option value="airconditioner">에어컨</option>
+                    <option value="fan">선풍기</option>
+                    <option value="dishwasher">식기세척기</option>
+                    <option value="microwave">전자레인지</option>
+                </select>
+                <select id="modeSelect" style="padding: 8px; border-radius: 5px;">
+                    <option value="normal">일반 작동</option>
+                </select>
+            </div>
+            
             <button id="measureBtn" onclick="startMeasurement()" disabled>측정 시작</button>
             <button id="stopBtn" onclick="stopMeasurement()" class="stop-btn" disabled>측정 중지</button>
         </div>
@@ -174,6 +191,43 @@
         let calibrationSamples = [];
         let calibrationTimer = null;
 
+        // 가전제품별 진단 기준
+        const applianceStandards = {
+            general: {
+                normal: { normal: 1.5, warning: 3.0 }
+            },
+            washer: {
+                wash: { normal: 1.5, warning: 3.0 },
+                rinse: { normal: 1.2, warning: 2.5 },
+                spin: { normal: 4.0, warning: 6.0 }
+            },
+            refrigerator: {
+                compressor_off: { normal: 0.3, warning: 0.6 },
+                compressor_on: { normal: 1.0, warning: 2.0 },
+                fan_running: { normal: 0.8, warning: 1.5 }
+            },
+            airconditioner: {
+                standby: { normal: 0.4, warning: 0.8 },
+                compressor: { normal: 1.5, warning: 3.0 },
+                fan_max: { normal: 2.0, warning: 3.5 }
+            },
+            fan: {
+                low: { normal: 0.8, warning: 1.5 },
+                medium: { normal: 1.2, warning: 2.2 },
+                high: { normal: 1.8, warning: 3.0 }
+            },
+            dishwasher: {
+                wash: { normal: 2.0, warning: 3.5 },
+                drain: { normal: 2.5, warning: 4.0 },
+                dry: { normal: 1.0, warning: 2.0 }
+            },
+            microwave: {
+                standby: { normal: 0.2, warning: 0.4 },
+                heating: { normal: 0.8, warning: 1.5 },
+                turbo_fan: { normal: 1.0, warning: 2.0 }
+            }
+        };
+
         // 버튼 및 상태 요소
         const startBtn = document.getElementById('startBtn');
         const calibrateBtn = document.getElementById('calibrateBtn');
@@ -183,6 +237,35 @@
         const diagnosis = document.getElementById('diagnosis');
         const dataInfo = document.getElementById('dataInfo');
         const calibrationInfo = document.getElementById('calibrationInfo');
+
+        // 가전제품 선택 이벤트
+        document.getElementById('applianceSelect').addEventListener('change', updateModeOptions);
+
+        // 모드 옵션 업데이트
+        function updateModeOptions() {
+            const appliance = document.getElementById('applianceSelect').value;
+            const modeSelect = document.getElementById('modeSelect');
+            
+            const modeOptions = {
+                general: [['normal', '일반 작동']],
+                washer: [['wash', '세탁'], ['rinse', '헹굼'], ['spin', '탈수']],
+                refrigerator: [['compressor_off', '압축기 OFF'], ['compressor_on', '압축기 ON'], ['fan_running', '팬 가동']],
+                airconditioner: [['standby', '대기모드'], ['compressor', '압축기 가동'], ['fan_max', '팬 최대속도']],
+                fan: [['low', '약풍 (1단)'], ['medium', '중풍 (2단)'], ['high', '강풍 (3단)']],
+                dishwasher: [['wash', '세척'], ['drain', '배수'], ['dry', '건조']],
+                microwave: [['standby', '대기'], ['heating', '가열중'], ['turbo_fan', '터보팬']]
+            };
+
+            modeSelect.innerHTML = '';
+            const options = modeOptions[appliance] || [['normal', '일반 작동']];
+            
+            options.forEach(([value, text]) => {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = text;
+                modeSelect.appendChild(option);
+            });
+        }
 
         // 센서 권한 요청
         async function requestPermission() {
@@ -435,12 +518,102 @@
             }
         }
 
-        // 진단 업데이트 (중력 보정된 새로운 기준)
+        // 진단 업데이트 (가전제품별 기준 적용)
         function updateDiagnosis(rms, maxVal) {
+            const appliance = document.getElementById('applianceSelect').value;
+            const mode = document.getElementById('modeSelect').value;
+            
+            const standard = applianceStandards[appliance]?.[mode];
+            if (!standard) {
+                // 기본 기준 사용
+                diagnosisBasic(rms, maxVal);
+                return;
+            }
+
+            let diagnosisText = '';
+            let className = '';
+            
+            const applianceNames = {
+                general: '기계',
+                washer: '세탁기',
+                refrigerator: '냉장고',
+                airconditioner: '에어컨',
+                fan: '선풍기',
+                dishwasher: '식기세척기',
+                microwave: '전자레인지'
+            };
+
+            const modeNames = {
+                normal: '일반 작동',
+                wash: '세탁', rinse: '헹굼', spin: '탈수',
+                compressor_off: '압축기 OFF', compressor_on: '압축기 ON', fan_running: '팬 가동',
+                standby: '대기모드', compressor: '압축기 가동', fan_max: '팬 최대속도',
+                low: '약풍', medium: '중풍', high: '강풍',
+                drain: '배수', dry: '건조',
+                heating: '가열중', turbo_fan: '터보팬'
+            };
+
+            const applianceName = applianceNames[appliance] || '기계';
+            const modeName = modeNames[mode] || '작동';
+
+            if (rms <= standard.normal) {
+                diagnosisText = `✅ 정상: ${applianceName} ${modeName} 모드가 정상 범위입니다 (${rms.toFixed(2)} m/s²)`;
+                className = 'normal';
+            } else if (rms <= standard.warning) {
+                diagnosisText = `⚠️ 주의: ${applianceName}에서 약간 높은 진동이 감지됩니다. 점검을 권장합니다 (${rms.toFixed(2)} m/s²)`;
+                className = 'warning';
+            } else {
+                diagnosisText = `🚨 위험: ${applianceName}에서 과도한 진동 감지! ${getDangerAdvice(appliance, mode)} (${rms.toFixed(2)} m/s²)`;
+                className = 'danger';
+            }
+
+            diagnosis.textContent = diagnosisText;
+            diagnosis.className = `diagnosis ${className}`;
+        }
+
+        // 위험 상황별 조치 사항
+        function getDangerAdvice(appliance, mode) {
+            const advice = {
+                washer: {
+                    wash: '모터 베어링 점검 필요',
+                    rinse: '배수 시스템 점검 필요', 
+                    spin: '세탁물 불균형 또는 축 마모 의심'
+                },
+                refrigerator: {
+                    compressor_off: '설치 상태 점검 필요',
+                    compressor_on: '압축기 마운트 불량 또는 냉매 부족 의심',
+                    fan_running: '팬 베어링 마모 의심'
+                },
+                airconditioner: {
+                    standby: '설치 불량 점검 필요',
+                    compressor: '압축기 불균형 또는 설치 불량',
+                    fan_max: '팬 블레이드 손상 또는 베어링 마모'
+                },
+                fan: {
+                    low: '날개 불균형 또는 모터 베어링 마모',
+                    medium: '날개 불균형 또는 모터 베어링 마모',
+                    high: '날개 불균형 또는 모터 베어링 마모'
+                },
+                dishwasher: {
+                    wash: '워시 펌프 점검 필요',
+                    drain: '배수 펌프 과부하 의심',
+                    dry: '건조팬 베어링 마모'
+                },
+                microwave: {
+                    standby: '내부 부품 점검 필요',
+                    heating: '마그네트론 불량 의심',
+                    turbo_fan: '냉각팬 베어링 마모'
+                }
+            };
+
+            return advice[appliance]?.[mode] || '즉시 전문가 점검 필요';
+        }
+
+        // 기본 진단 (이전 방식)
+        function diagnosisBasic(rms, maxVal) {
             let diagnosisText = '';
             let className = '';
 
-            // 중력 보정된 현실적인 기준값
             if (rms < 0.5 && maxVal < 2.0) {
                 diagnosisText = '✅ 우수: 매우 낮은 진동 수준';
                 className = 'normal';
@@ -517,6 +690,7 @@
         // 페이지 로드 시 안내
         window.addEventListener('load', function() {
             status.textContent = '📱 스마트폰 기반 기계 진동 분석기입니다. 센서 권한을 먼저 요청해주세요.';
+            updateModeOptions(); // 초기 모드 옵션 설정
         });
     </script>
 </body>
